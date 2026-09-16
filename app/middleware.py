@@ -1,5 +1,3 @@
-"""Logs every request: method, path, status code, and duration.
-Separated from main.py to keep that file focused on routing."""
 import time
 
 from starlette.middleware.base import BaseHTTPMiddleware

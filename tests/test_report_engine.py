@@ -1,9 +1,3 @@
-"""Tests for ReportEngine's fallback orchestration — verifies Groq is
-used when it succeeds, Gemini is used only when Groq fails, and both
-failing raises ReportEngineError. No real API keys/clients needed:
-ReportEngine.__new__() skips __init__ entirely, and the two provider
-methods are mocked directly, testing generate_report()'s own logic in
-isolation."""
 import os
 
 os.environ.setdefault("GROQ_API_KEY", "test-key-for-unit-tests")
@@ -28,8 +22,6 @@ def _sample_audit_data() -> AuditDataInput:
 
 
 def _bare_engine() -> ReportEngine:
-    # skips __init__ — no real Groq/Gemini clients constructed, so no
-    # API keys are actually used despite the env vars set above
     return ReportEngine.__new__(ReportEngine)
 
 

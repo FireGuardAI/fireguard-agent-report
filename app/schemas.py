@@ -1,9 +1,3 @@
-"""Pydantic request/response models for the report API.
-
-compliance_score bounded to 0-100, matching fireguard-agent-compliance's
-schema — this is literally that service's output shape, so the bounds
-should agree.
-"""
 from typing import Optional
 
 from pydantic import BaseModel, Field

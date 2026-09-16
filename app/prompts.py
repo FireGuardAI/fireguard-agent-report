@@ -1,5 +1,3 @@
-"""System prompts for the report generation engine."""
-
 REPORT_SYSTEM_PROMPT = "You are an expert Fire Safety Compliance Auditor."
 
 REPORT_GENERATION_PROMPT = """
