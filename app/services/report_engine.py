@@ -1,18 +1,3 @@
-"""Report generation engine — Groq (primary) with automatic fallback to
-Gemini if Groq is persistently failing or rate-limited.
-
-Fixes three reference-doc bugs:
-1. Used a SYNC `Groq()` client inside an `async def` with no `await` —
-   that blocks the entire event loop for the duration of the HTTP call,
-   stalling every other concurrent request this API is serving. Fixed
-   with `AsyncGroq`.
-2. `tenacity` was listed as a dependency ("Resiliency") but never used
-   anywhere — a single transient Groq hiccup immediately triggered
-   fallback to Gemini instead of just retrying Groq first. Now Groq gets
-   `groq_max_retries` attempts (exponential backoff) before falling back.
-3. The fallback path used `print(f"[WARN] ...")` — invisible to any real
-   log aggregator, no level or timestamp. Now uses the structured logger.
-"""
 import asyncio
 import json
 
@@ -32,9 +17,6 @@ logger = get_logger(__name__)
 class ReportEngine:
     def __init__(self):
         self._groq_client = AsyncGroq(api_key=settings.groq_api_key)
-        # google-genai — the current SDK (see fireguard-agent-compliance
-        # for why: google-generativeai, which the reference doc used, is
-        # being deprecated)
         self._gemini_client = genai.Client(api_key=settings.gemini_api_key)
         logger.info(
             f"ReportEngine ready (primary=Groq/{settings.groq_model_name}, "
@@ -61,8 +43,6 @@ class ReportEngine:
         )
         content = response.choices[0].message.content
         if not content or not content.strip():
-            # empty completion is treated as a failure worth retrying/
-            # falling back on, not a valid (if useless) report
             raise ReportEngineError(
                 "Groq returned an empty completion", primary_error="empty response",
                 fallback_error="",
@@ -82,7 +62,6 @@ class ReportEngine:
         return response.text
 
     async def self_check_groq(self) -> None:
-        """Used by /health/groq — one minimal real API call."""
         try:
             await asyncio.wait_for(
                 self._groq_client.chat.completions.create(
@@ -98,7 +77,6 @@ class ReportEngine:
             ) from exc
 
     async def self_check_gemini(self) -> None:
-        """Used by /health/gemini — one minimal real API call."""
         try:
             await asyncio.wait_for(
                 self._gemini_client.aio.models.generate_content(
