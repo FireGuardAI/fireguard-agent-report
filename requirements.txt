@@ -5,6 +5,9 @@ google-genai>=1.0.0,<2.0.0
 tenacity>=8.2.0,<9.0.0
 httpx>=0.27.0,<0.28.0
 
+# Step 4: production hardening — rate limiting
+slowapi>=0.1.9,<0.2.0
+
 # Step 4 adds slowapi (rate limiting).
 # No ML/embedding libraries needed — both LLM calls are remote APIs.
 

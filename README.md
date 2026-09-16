@@ -14,7 +14,8 @@ rate-limited or unavailable.
 - [x] **Step 2** — Report engine (Groq primary + Gemini fallback, with
       retries), `/health/groq`, `/health/gemini`
 - [x] **Step 3** — `/api/v1/generate-report` endpoint + `/health/all`
-- [ ] Step 4 — Production hardening
+- [x] **Step 4** — Production hardening (rate limiting, global exception
+      handler, request logging, mocked fallback-logic tests)
 
 ## Prerequisites
 
@@ -128,3 +129,30 @@ Expected: `building_name`, `overall_status`, `compliance_score`,
 `executive_summary_markdown` (a full Markdown report — headings, bullet
 points, callouts per the prompt's structure), `generated_by` (confirms
 which LLM actually produced it).
+
+## Step 4 — Production hardening
+
+**1. Rate limiting** (`slowapi`) — `/api/v1/generate-report` throttled
+(`REPORT_RATE_LIMIT`, default `10/minute`) to protect both Groq and
+Gemini quota. Same gotcha as `fireguard-agent-compliance`: slowapi's
+`@limiter.limit()` looks up the Starlette `Request` param by the literal
+name `request`, so the request body param is named `report_request`
+instead of `request` (which the reference doc used, and which would
+have silently broken rate limiting).
+
+**2. Global exception handler** — a final backstop so an unexpected bug
+can never leak a raw traceback to a client.
+
+**3. Request logging middleware** (`app/middleware.py`).
+
+**4. Mocked fallback-logic tests** — no real API keys/clients needed:
+
+```powershell
+pip install -r requirements.txt -r requirements-dev.txt
+pytest tests/ -v
+```
+
+`tests/test_report_engine.py` verifies: Groq succeeding means Gemini is
+never called; Groq failing triggers the Gemini fallback and the response
+says so (`generated_by` contains `"fallback"`); both failing raises
+`ReportEngineError`.
