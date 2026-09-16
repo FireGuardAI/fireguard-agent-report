@@ -9,16 +9,21 @@ Note: the reference doc jumped straight to a /health/all endpoint that
 makes real HTTP/LLM calls, with no cheap /health for the Docker
 healthcheck to poll every 30s. That would burn through Groq/Gemini quota
 fast on its own. This repo keeps the same split as fireguard-agent-
-compliance: a free /health for container polling, and /health/all (added
-in Step 3) as a manual, real-call aggregate check.
+compliance: a free /health for container polling, and /health/all as a
+manual, real-call aggregate check.
 """
 import httpx
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 
 from app.config import settings
 from app.exceptions import ReportEngineError
 from app.logger import get_logger
+from app.middleware import RequestLoggingMiddleware
 from app.schemas import ReportRequest, ReportResponse
 from app.services.report_engine import ReportEngine
 
@@ -32,6 +37,23 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(RequestLoggingMiddleware)
+
+# Rate limiting (Step 4) — protects both Groq and Gemini quota from
+# being exhausted by /api/v1/generate-report traffic.
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Defense-in-depth: catches anything NOT already caught by a
+    specific handler, so a bug can never leak a raw traceback to a
+    client — same philosophy as fireguard-agent-compliance's Step 5."""
+    logger.error(f"Unhandled exception on {request.url.path}: {exc}", exc_info=True)
+    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
+
 
 # Loaded once at startup (see on_startup below), never per-request.
 report_engine: ReportEngine | None = None
@@ -41,7 +63,7 @@ report_engine: ReportEngine | None = None
 async def health() -> dict:
     """Basic liveness check — confirms the API process itself is up.
     Does NOT check Groq, Gemini, or the compliance agent; those get
-    /health/groq, /health/gemini, and /health/all (Step 3)."""
+    /health/groq, /health/gemini, and /health/all."""
     return {"status": "ok", "service": settings.api_title}
 
 
@@ -116,19 +138,28 @@ async def health_all() -> dict:
 
 
 @app.post("/api/v1/generate-report", response_model=ReportResponse)
-async def generate_executive_report(request: ReportRequest) -> ReportResponse:
+@limiter.limit(settings.report_rate_limit)
+async def generate_executive_report(
+    request: Request, report_request: ReportRequest
+) -> ReportResponse:
     """Generates the executive report. Fixes the reference doc's blanket
     `except Exception: raise HTTPException(500, str(e))` — that leaked
-    raw provider-internal error text (from whichever of Groq/Gemini
-    failed) straight into the client-facing response. Now the specific
-    failure details are logged server-side only; the client gets one
-    clean, actionable message."""
+    raw provider-internal error text straight into the client-facing
+    response. Now the specific failure details are logged server-side
+    only; the client gets one clean, actionable message.
+
+    NOTE: the Starlette request param MUST be named exactly `request` —
+    slowapi's @limiter.limit() looks it up by that name. The reference
+    doc's endpoint used `request: ReportRequest` for the body, which
+    would have collided with this; the body param is named
+    `report_request` instead (same fix as fireguard-agent-compliance's
+    Step 5)."""
     if report_engine is None:
         raise HTTPException(status_code=503, detail="Report engine not initialized")
 
     try:
         report_md, generated_by = await report_engine.generate_report(
-            request.audit_data
+            report_request.audit_data
         )
     except ReportEngineError as exc:
         logger.error(
@@ -142,9 +173,9 @@ async def generate_executive_report(request: ReportRequest) -> ReportResponse:
         ) from exc
 
     return ReportResponse(
-        building_name=request.building_name,
-        overall_status=request.audit_data.overall_status,
-        compliance_score=request.audit_data.compliance_score,
+        building_name=report_request.building_name,
+        overall_status=report_request.audit_data.overall_status,
+        compliance_score=report_request.audit_data.compliance_score,
         executive_summary_markdown=report_md,
         generated_by=generated_by,
     )
